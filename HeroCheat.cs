@@ -12,10 +12,15 @@ namespace MyFirstPlugin {
         public static HeroPatchWithUI Instance { get; private set; }
 
         private Harmony harmony;
-        public bool enablePatch = false; // Global toggle for the patch
+        public bool enablePatch = false; // Global toggle
+
         public Dictionary<Players_FindNearestAndAttack, bool> instanceStates = new Dictionary<Players_FindNearestAndAttack, bool>();
+
         public Dictionary<Players_FindNearestAndAttack, (int Hp, float critChance, float lifeSteal)> originalStats =
             new Dictionary<Players_FindNearestAndAttack, (int, float, float)>();
+
+        public Dictionary<Players_FindNearestAndAttack, (float critAdded, float lifeStealAdded)> modifications =
+        new Dictionary<Players_FindNearestAndAttack, (float, float)>();
 
         private void Awake() {
             Instance = this;
@@ -60,43 +65,44 @@ namespace MyFirstPlugin {
             GUILayout.EndArea();
         }
 
+        public void RestoreOriginalStats(Players_FindNearestAndAttack instance) {
+            if (originalStats.TryGetValue(instance, out var stats) &&
+                modifications.TryGetValue(instance, out var mod)) {
+                instance.Hp = instance.maxHp;
+                instance.critChance -= mod.critAdded;
+                instance.lifeSteal -= mod.lifeStealAdded;
+
+                modifications[instance] = (0, 0);
+
+                Logger.LogInfo($"Restored stats for instance: {instance.name}");
+            }
+        }
+
         public void RegisterInstance(Players_FindNearestAndAttack instance) {
             if (!instanceStates.ContainsKey(instance)) {
                 instanceStates.Add(instance, true);
 
-                // Save original stats
                 originalStats[instance] = (instance.Hp, instance.critChance, instance.lifeSteal);
 
+                modifications[instance] = (0, 0);
+
                 Logger.LogInfo($"Registered instance: {instance.name}");
-                Logger.LogInfo($"Original stats: {originalStats[instance]} ");
             }
         }
 
         public void UnregisterInstance(Players_FindNearestAndAttack instance) {
             if (instanceStates.ContainsKey(instance)) {
                 instanceStates.Remove(instance);
-
-                // Remove from original stats
                 originalStats.Remove(instance);
+                modifications.Remove(instance);
 
                 Logger.LogInfo($"Unregistered instance: {instance.name}");
-            }
-        }
-
-        public void RestoreOriginalStats(Players_FindNearestAndAttack instance) {
-            if (originalStats.TryGetValue(instance, out var stats)) {
-                // instance.Hp = stats.Hp;
-                instance.critChance = stats.critChance;
-                instance.lifeSteal = stats.lifeSteal;
-
-                Logger.LogInfo($"Restored original stats for instance: {instance.name}");
             }
         }
     }
 
     [HarmonyPatch(typeof(Players_FindNearestAndAttack))]
     public static class PlayersFindNearestAndAttackPatch {
-        internal static ManualLogSource Logger;
 
         [HarmonyPatch("Start"), HarmonyPostfix]
         public static void PostfixAwake(Players_FindNearestAndAttack __instance) {
@@ -118,16 +124,24 @@ namespace MyFirstPlugin {
                 HeroPatchWithUI.Instance.instanceStates.TryGetValue(__instance, out bool isEnabled)) {
 
                 if (HeroPatchWithUI.Instance.enablePatch && isEnabled) {
-                    // Apply modified stats
-                    __instance.Hp = 9999;
-                    __instance.critChance = 1; // 100%
-                    __instance.lifeSteal = 2; // 200%
+                    // Apply changes only if they haven't been applied yet
+                    if (HeroPatchWithUI.Instance.modifications.TryGetValue(__instance, out var mod)) {
+                        __instance.Hp = 9999;
+
+                        if (mod.critAdded == 0 && mod.lifeStealAdded == 0) {
+                            __instance.critChance += 1; // 100%
+                            __instance.lifeSteal += 2;  // 200%
+
+                            HeroPatchWithUI.Instance.modifications[__instance] = (1, 2);
+                            HeroPatchWithUI.Logger.LogInfo($"Applied mod changes to instance: {__instance.name}");
+                        }
+                    }
                 }
                 else {
-                    // Restore original stats
                     HeroPatchWithUI.Instance.RestoreOriginalStats(__instance);
                 }
             }
         }
+
     }
 }
